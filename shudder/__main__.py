@@ -25,7 +25,14 @@ import sys
 import logging
 from requests.exceptions import ConnectionError
 
-logging.basicConfig(filename=LOG_FILE,format='%(asctime)s %(levelname)s:%(message)s',level=logging.INFO)
+root = logging.getLogger()
+root.setLevel(logging.INFO)
+
+handler = logging.StreamHandler(sys.stdout)
+handler.setLevel(logging.INFO)
+formatter = logging.Formatter('%(name)s - %(levelname)s - %(message)s')
+handler.setFormatter(formatter)
+root.addHandler(handler)
 
 
 def receive_signal(signum, stack):
@@ -48,8 +55,11 @@ if __name__ == '__main__':
     while running:
       try:
         message = queue.poll_queue(sqs_connection, sqs_queue)
+
         if message or metadata.poll_instance_metadata():
+            logging.info("Message detected: %s", message)
             queue.clean_up_sns(sns_connection, subscription_arn, sqs_queue)
+
             if 'endpoint' in CONFIG:
                 requests.get(CONFIG["endpoint"])
             if 'endpoints' in CONFIG:
@@ -57,19 +67,27 @@ if __name__ == '__main__':
                     requests.get(endpoint)
             if 'commands' in CONFIG:
                 for command in CONFIG["commands"]:
-                    print 'Running command: %s' % command
+                    logging.info("Running command: %s", command)
                     process = subprocess.Popen(command)
                     while process.poll() is None:
                         time.sleep(30)
                         """Send a heart beat to aws"""
                         try:
-                          queue.record_lifecycle_action_heartbeat(message)
+                            logging.info("Sending heartbeat")
+                            queue.record_lifecycle_action_heartbeat(message)
                         except:
                           logging.exception('Error sending hearbeat for')
                           logging.info(message)
-                        
+
             """Send a complete lifecycle action"""
-            queue.complete_lifecycle_action(message)
+            logging.info("Waiting 60 seconds after command completion")
+            time.sleep(60)
+            try:
+                queue.complete_lifecycle_action(message)
+            except Exception:
+                logging.exception("Failed to send complete lifecycle action event!")
+            logging.info("Sent complete lifecycle action event")
+
             running = False
         time.sleep(5)
       except ConnectionError:
